@@ -92,10 +92,9 @@ const EDITOR_FIELDS = [
 ];
 
 export default function App() {
-  const containerRef  = useRef(null);
-  const chartRef      = useRef(null);
-  const zoomReadyRef  = useRef(false);
-  const prevHorizRef  = useRef(null);
+  const containerRef = useRef(null);
+  const chartRef     = useRef(null);
+  const prevHorizRef = useRef(null);
 
   useEditorPanelConfig(EDITOR_FIELDS);
 
@@ -133,16 +132,23 @@ export default function App() {
     ? data[colorColId].map(String)
     : labels;
 
+  // ── Init chart once ──────────────────────────────────────────────────────
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !labels.length) return;
+    if (!container) return;
+    chartRef.current = echarts.init(container);
+    const ro = new ResizeObserver(() => chartRef.current?.resize());
+    ro.observe(container);
+    return () => {
+      ro.disconnect();
+      chartRef.current?.dispose();
+      chartRef.current = null;
+    };
+  }, []);
 
-    if (!chartRef.current) {
-      chartRef.current = echarts.init(container);
-      const ro = new ResizeObserver(() => chartRef.current?.resize());
-      ro.observe(container);
-      zoomReadyRef.current = false;
-    }
+  // ── Update data and appearance (never touches dataZoom) ───────────────────
+  useEffect(() => {
+    if (!chartRef.current || !labels.length) return;
 
     const colours    = buildColours(values, colorKeys, colorMode, barColor, gradientLow);
     const paletteMap = colorMode === 'palette' ? buildPaletteMap(colorKeys) : {};
@@ -218,12 +224,12 @@ export default function App() {
       },
     };
 
-    // Only (re)set dataZoom on first init or when orientation flips —
-    // including it on every call would reset the slider position.
+    // Include dataZoom only on first call or when orientation changes —
+    // never on cosmetic config changes, so zoom position is preserved.
     const orientChanged = prevHorizRef.current !== isHorizontal;
     prevHorizRef.current = isHorizontal;
 
-    if (!zoomReadyRef.current || orientChanged) {
+    if (orientChanged) {
       option.dataZoom = isHorizontal ? [
         { type: 'slider', yAxisIndex: 0, right: 8, width: 20 },
         { type: 'inside', yAxisIndex: 0 },
@@ -231,15 +237,10 @@ export default function App() {
         { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20 },
         { type: 'inside', xAxisIndex: 0 },
       ];
-      zoomReadyRef.current = true;
     }
 
     chartRef.current.setOption(option);
   });
-
-  useEffect(() => {
-    return () => { chartRef.current?.dispose(); chartRef.current = null; };
-  }, []);
 
   if (!dimId || !mesId) {
     return (
