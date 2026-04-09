@@ -66,6 +66,10 @@ const EDITOR_FIELDS = [
   { name: 'dimensionCol', type: 'column', source: 'source', label: 'Axis',           allowedTypes: ['text', 'datetime'] },
   { name: 'measureCol',   type: 'column', source: 'source', label: 'Measure',        allowedTypes: ['number', 'integer'] },
   { name: 'labelRotate',  type: 'text',                     label: 'Label rotation',  defaultValue: '45' },
+  { name: 'showLabels',   type: 'checkbox',                 label: 'Show labels',     defaultValue: true },
+  { name: 'labelSize',    type: 'text',                     label: 'Label size',      defaultValue: '12' },
+  { name: 'labelWidth',   type: 'text',                     label: 'Max label width' },
+  { name: 'axisTitle',    type: 'text',                     label: 'Axis title' },
   { name: 'colorMode',   type: 'radio',                    label: 'Color mode',     values: ['single', 'gradient', 'palette'], defaultValue: 'single', singleLine: true },
   { name: 'barColor',    type: 'color',                    label: 'Bar color' },
   { name: 'gradientLow', type: 'color',                    label: 'Gradient low' },
@@ -83,7 +87,11 @@ export default function App() {
   const dimId    = config?.dimensionCol;
   const mesId    = config?.measureCol;
 
-  const labelRotate = Math.min(90, Math.max(0, parseInt(config?.labelRotate) || 45));
+  const labelRotate  = Math.min(90, Math.max(0, parseInt(config?.labelRotate) || 45));
+  const showLabels   = config?.showLabels !== false;
+  const labelSize    = Math.max(8, parseInt(config?.labelSize) || 12);
+  const labelWidth   = parseInt(config?.labelWidth) || null;
+  const axisTitle    = config?.axisTitle || '';
   const colorMode   = config?.colorMode   || 'single';
   const barColor    = config?.barColor    || '#3c79c8';
   const gradientLow = config?.gradientLow || '#c8dff8';
@@ -125,7 +133,15 @@ export default function App() {
       xAxis: {
         type: 'category',
         data: labels,
-        axisLabel: { rotate: labelRotate },
+        name: axisTitle,
+        nameLocation: 'middle',
+        nameGap: labelRotate > 0 ? labelSize * 2.5 + 16 : 24,
+        axisLabel: {
+          show: showLabels,
+          rotate: labelRotate,
+          fontSize: labelSize,
+          ...(labelWidth ? { overflow: 'truncate', width: labelWidth } : {}),
+        },
       },
       yAxis: {
         type: 'value',
