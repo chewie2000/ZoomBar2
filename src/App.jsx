@@ -34,46 +34,61 @@ function lerpColor(lo, hi, t) {
   return `rgb(${Math.round(lr+t*(hr-lr))},${Math.round(lg+t*(hg-lg))},${Math.round(lb+t*(hb-lb))})`;
 }
 
-// Palette for 'dimension' mode — 12 distinct colours
 const PALETTE = [
   '#3c79c8','#e06c4a','#4caf7d','#f0b429','#9b59b6',
   '#17a2b8','#e91e63','#8bc34a','#ff7043','#5c6bc0',
   '#26a69a','#ef5350',
 ];
 
-function buildColours(values, labels, mode, barColour, gradLow) {
+function buildPaletteMap(keys) {
+  const map = {};
+  let idx = 0;
+  keys.forEach(k => { if (!(k in map)) map[k] = PALETTE[idx++ % PALETTE.length]; });
+  return map;
+}
+
+function buildColours(values, colorKeys, mode, barColour, gradLow) {
   if (mode === 'gradient') {
     const min = Math.min(...values), max = Math.max(...values), range = max - min || 1;
     return values.map(v => lerpColor(gradLow, barColour, (v - min) / range));
   }
   if (mode === 'palette') {
-    // Assign palette colour by unique label so the same category always gets
-    // the same colour even if the sort order changes.
-    const map = {};
-    let idx = 0;
-    return labels.map(l => {
-      if (!(l in map)) map[l] = PALETTE[idx++ % PALETTE.length];
-      return map[l];
-    });
+    const map = buildPaletteMap(colorKeys);
+    return colorKeys.map(k => map[k]);
   }
-  // 'single' (default)
   return values.map(() => barColour);
+}
+
+// ── Value formatter ───────────────────────────────────────────────────────────
+function fmtValue(v, prefix, suffix, decimals) {
+  const dp = parseInt(decimals);
+  const num = isNaN(dp) ? v : Number(v).toFixed(dp);
+  return `${prefix}${num}${suffix}`;
 }
 
 // ── Editor fields ─────────────────────────────────────────────────────────────
 const EDITOR_FIELDS = [
-  { name: 'source',       type: 'element' },
-  { name: 'dimensionCol', type: 'column', source: 'source', label: 'Axis',           allowedTypes: ['text', 'datetime'] },
-  { name: 'measureCol',   type: 'column', source: 'source', label: 'Measure',        allowedTypes: ['number', 'integer'] },
-  { name: 'labelRotate',  type: 'text',                     label: 'Label rotation',  defaultValue: '45' },
-  { name: 'showLabels',   type: 'checkbox',                 label: 'Show labels',     defaultValue: true },
-  { name: 'labelSize',    type: 'text',                     label: 'Label size',      defaultValue: '12' },
-  { name: 'labelWidth',   type: 'text',                     label: 'Max label width' },
-  { name: 'axisTitle',    type: 'text',                     label: 'Axis title' },
-  { name: 'colorMode',   type: 'radio',                    label: 'Color mode',     values: ['single', 'gradient', 'palette'], defaultValue: 'single', singleLine: true },
-  { name: 'barColor',    type: 'color',                    label: 'Bar color' },
-  { name: 'gradientLow', type: 'color',                    label: 'Gradient low' },
-  { name: 'colorCol',    type: 'column', source: 'source', label: 'Palette column', allowedTypes: ['text', 'number', 'integer', 'datetime'] },
+  { name: 'source',         type: 'element' },
+  { name: 'dimensionCol',   type: 'column',   source: 'source', label: 'Axis',             allowedTypes: ['text', 'datetime'] },
+  { name: 'measureCol',     type: 'column',   source: 'source', label: 'Measure',           allowedTypes: ['number', 'integer'] },
+  { name: 'orientation',    type: 'radio',                      label: 'Orientation',        values: ['vertical', 'horizontal'], defaultValue: 'vertical', singleLine: true },
+  { name: 'labelRotate',    type: 'text',                       label: 'Label rotation',     defaultValue: '45' },
+  { name: 'showLabels',     type: 'checkbox',                   label: 'Show labels',        defaultValue: true },
+  { name: 'labelSize',      type: 'text',                       label: 'Label size',         defaultValue: '12' },
+  { name: 'labelWidth',     type: 'text',                       label: 'Max label width' },
+  { name: 'axisTitle',      type: 'text',                       label: 'Axis title' },
+  { name: 'yPrefix',        type: 'text',                       label: 'Value prefix' },
+  { name: 'ySuffix',        type: 'text',                       label: 'Value suffix' },
+  { name: 'yDecimals',      type: 'text',                       label: 'Decimal places' },
+  { name: 'barRadius',      type: 'text',                       label: 'Rounded corners',    defaultValue: '0' },
+  { name: 'showDataLabels', type: 'checkbox',                   label: 'Show data labels' },
+  { name: 'dataLabelSize',  type: 'text',                       label: 'Data label size',    defaultValue: '11' },
+  { name: 'dataLabelPos',   type: 'radio',                      label: 'Label position',     values: ['top', 'inside'], defaultValue: 'top', singleLine: true },
+  { name: 'colorMode',      type: 'radio',                      label: 'Color mode',         values: ['single', 'gradient', 'palette'], defaultValue: 'single', singleLine: true },
+  { name: 'barColor',       type: 'color',                      label: 'Bar color' },
+  { name: 'gradientLow',    type: 'color',                      label: 'Gradient low' },
+  { name: 'colorCol',       type: 'column',   source: 'source', label: 'Palette column',    allowedTypes: ['text', 'number', 'integer', 'datetime'] },
+  { name: 'showLegend',     type: 'checkbox',                   label: 'Show legend' },
 ];
 
 export default function App() {
@@ -87,15 +102,24 @@ export default function App() {
   const dimId    = config?.dimensionCol;
   const mesId    = config?.measureCol;
 
-  const labelRotate  = Math.min(90, Math.max(0, parseInt(config?.labelRotate) || 45));
-  const showLabels   = config?.showLabels !== false;
-  const labelSize    = Math.max(8, parseInt(config?.labelSize) || 12);
-  const labelWidth   = parseInt(config?.labelWidth) || null;
-  const axisTitle    = config?.axisTitle || '';
-  const colorMode   = config?.colorMode   || 'single';
-  const barColor    = config?.barColor    || '#3c79c8';
-  const gradientLow = config?.gradientLow || '#c8dff8';
-  const colorColId  = config?.colorCol;
+  const isHorizontal   = (config?.orientation || 'vertical') === 'horizontal';
+  const labelRotate    = isHorizontal ? 0 : Math.min(90, Math.max(0, parseInt(config?.labelRotate) || 45));
+  const showLabels     = config?.showLabels     !== false;
+  const labelSize      = Math.max(8, parseInt(config?.labelSize)     || 12);
+  const labelWidth     = parseInt(config?.labelWidth) || null;
+  const axisTitle      = config?.axisTitle      || '';
+  const yPrefix        = config?.yPrefix        || '';
+  const ySuffix        = config?.ySuffix        || '';
+  const yDecimals      = config?.yDecimals      || '';
+  const barRadius      = Math.max(0, parseInt(config?.barRadius)     || 0);
+  const showDataLabels = config?.showDataLabels === true;
+  const dataLabelSize  = Math.max(8, parseInt(config?.dataLabelSize) || 11);
+  const dataLabelPos   = config?.dataLabelPos   || 'top';
+  const colorMode      = config?.colorMode      || 'single';
+  const barColor       = config?.barColor       || '#3c79c8';
+  const gradientLow    = config?.gradientLow    || '#c8dff8';
+  const colorColId     = config?.colorCol;
+  const showLegend     = config?.showLegend     === true;
 
   const data = useElementData(sourceId);
   const cols = useElementColumns(sourceId);
@@ -103,7 +127,6 @@ export default function App() {
   const dimIsDate = cols?.[dimId]?.columnType === 'datetime';
   const labels    = (data?.[dimId]    ?? []).map(v => dimIsDate ? formatCivil(v) : String(v));
   const values    = (data?.[mesId]    ?? []).map(Number);
-  // Color keys: use colorCol if selected, otherwise fall back to labels
   const colorKeys = (colorColId && data?.[colorColId])
     ? data[colorColId].map(String)
     : labels;
@@ -118,48 +141,84 @@ export default function App() {
       ro.observe(container);
     }
 
-    const colours = buildColours(values, colorKeys, colorMode, barColor, gradientLow);
+    const colours    = buildColours(values, colorKeys, colorMode, barColor, gradientLow);
+    const paletteMap = colorMode === 'palette' ? buildPaletteMap(colorKeys) : {};
 
-    // For palette mode ECharts needs per-bar itemStyle; for others a single
-    // color on the series is fine — but using per-bar data works for all modes.
+    // Top corners for vertical bars, right corners for horizontal
+    const borderRadius = isHorizontal ? [0, barRadius, barRadius, 0] : [barRadius, barRadius, 0, 0];
+
     const seriesData = values.map((v, i) => ({
       value: v,
-      itemStyle: { color: colours[i] },
+      name: colorMode === 'palette' ? colorKeys[i] : undefined,
+      itemStyle: { color: colours[i], borderRadius },
     }));
+
+    const valueFormatter = v => fmtValue(v, yPrefix, ySuffix, yDecimals);
+
+    const catAxis = {
+      type: 'category',
+      data: labels,
+      name: axisTitle,
+      nameLocation: 'middle',
+      nameGap: isHorizontal ? 50 : (labelRotate > 0 ? labelSize * 2.5 + 16 : 24),
+      axisLabel: {
+        show: showLabels,
+        rotate: isHorizontal ? 0 : labelRotate,
+        fontSize: labelSize,
+        ...(labelWidth ? { overflow: 'truncate', width: labelWidth } : {}),
+      },
+    };
+
+    const valAxis = {
+      type: 'value',
+      name: cols?.[mesId]?.name ?? '',
+      nameLocation: 'end',
+      nameGap: 8,
+      axisLabel: { formatter: valueFormatter },
+    };
+
+    const legendOn = showLegend && colorMode === 'palette';
+    const legendData = legendOn
+      ? Object.entries(paletteMap).map(([name, color]) => ({ name, itemStyle: { color } }))
+      : [];
 
     chartRef.current.setOption({
       animation: false,
-      grid: { top: 40, right: 20, bottom: 40, left: 20, containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: labels,
-        name: axisTitle,
-        nameLocation: 'middle',
-        nameGap: labelRotate > 0 ? labelSize * 2.5 + 16 : 24,
-        axisLabel: {
-          show: showLabels,
-          rotate: labelRotate,
-          fontSize: labelSize,
-          ...(labelWidth ? { overflow: 'truncate', width: labelWidth } : {}),
-        },
+      grid: {
+        top:    legendOn ? 60 : 40,
+        right:  isHorizontal ? 48 : 20,
+        bottom: 40,
+        left:   20,
+        containLabel: true,
       },
-      yAxis: {
-        type: 'value',
-        name: cols?.[mesId]?.name ?? '',
-        nameLocation: 'end',
-        nameGap: 8,
-      },
+      xAxis: isHorizontal ? valAxis : catAxis,
+      yAxis: isHorizontal ? catAxis : valAxis,
       series: [{
         type: 'bar',
         data: seriesData,
+        label: {
+          show: showDataLabels,
+          position: dataLabelPos,
+          fontSize: dataLabelSize,
+          formatter: ({ value }) => valueFormatter(value),
+        },
       }],
-      dataZoom: [
+      dataZoom: isHorizontal ? [
+        { type: 'slider', yAxisIndex: 0, right: 8, width: 20 },
+        { type: 'inside', yAxisIndex: 0 },
+      ] : [
         { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20 },
         { type: 'inside', xAxisIndex: 0 },
       ],
+      legend: {
+        show: legendOn,
+        data: legendData,
+        selectedMode: false,
+      },
       tooltip: {
         trigger: 'axis',
         axisPointer: { type: 'shadow' },
+        valueFormatter,
       },
     });
   });
