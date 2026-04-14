@@ -59,6 +59,9 @@ function buildColours(values, colorKeys, mode, barColour, gradLow) {
   return values.map(() => barColour);
 }
 
+// ── Zoom state — module-level so it survives component remounts ───────────────
+const zoomState = { start: 0, end: 100 };
+
 // ── Value formatter ───────────────────────────────────────────────────────────
 function fmtValue(v, prefix, suffix, decimals) {
   const dp = parseInt(decimals);
@@ -139,6 +142,14 @@ export default function App() {
     chartRef.current = echarts.init(container);
     const ro = new ResizeObserver(() => chartRef.current?.resize());
     ro.observe(container);
+    // Keep zoomState in sync whenever the user moves the slider
+    chartRef.current.on('datazoom', () => {
+      const dz = chartRef.current?.getOption()?.dataZoom;
+      if (dz?.length) {
+        zoomState.start = dz[0].start ?? 0;
+        zoomState.end   = dz[0].end   ?? 100;
+      }
+    });
     return () => {
       ro.disconnect();
       chartRef.current?.dispose();
@@ -227,26 +238,20 @@ export default function App() {
     const orientChanged = prevHorizRef.current !== isHorizontal;
     prevHorizRef.current = isHorizontal;
 
-    if (orientChanged) {
-      option.dataZoom = isHorizontal ? [
-        { type: 'slider', yAxisIndex: 0, right: 8, width: 20 },
-        { type: 'inside', yAxisIndex: 0 },
-      ] : [
-        { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20 },
-        { type: 'inside', xAxisIndex: 0 },
-      ];
-    }
+    // Reset tracked zoom when orientation flips, otherwise keep current position
+    if (orientChanged) { zoomState.start = 0; zoomState.end = 100; }
 
-    // Save zoom position before update — ECharts can reset it when axis data changes
-    const dzState = !orientChanged ? chartRef.current.getOption()?.dataZoom : null;
-    const savedZoom = dzState?.length ? { start: dzState[0].start, end: dzState[0].end } : null;
+    // Always pass current zoom position into setOption — ECharts cannot silently reset it
+    const { start, end } = zoomState;
+    option.dataZoom = isHorizontal ? [
+      { type: 'slider', yAxisIndex: 0, right: 8, width: 20, start, end },
+      { type: 'inside', yAxisIndex: 0 },
+    ] : [
+      { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, start, end },
+      { type: 'inside', xAxisIndex: 0 },
+    ];
 
     chartRef.current.setOption(option);
-
-    // Restore zoom position if ECharts reset it during setOption
-    if (savedZoom) {
-      chartRef.current.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, ...savedZoom });
-    }
   });
 
   if (!dimId || !mesId) {
