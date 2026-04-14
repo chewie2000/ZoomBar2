@@ -59,8 +59,36 @@ function buildColours(values, colorKeys, mode, barColour, gradLow) {
   return values.map(() => barColour);
 }
 
-// ── Zoom state — module-level so it survives component remounts ───────────────
+// ── Chart + zoom state — module-level so they survive React remounts ─────────
+// Sigma remounts the component on every config change; keeping these outside
+// React means the chart instance and zoom position are never lost.
 const zoomState = { start: 0, end: 100 };
+let _chart     = null;   // ECharts instance
+let _container = null;   // DOM node the instance is attached to
+let _inSetOption = false; // guard: ignore datazoom events fired BY setOption
+
+function getChart(container) {
+  // Container changes on remount — dispose old instance and reinit on new node
+  if (_chart && _container !== container) {
+    if (!_chart.isDisposed()) _chart.dispose();
+    _chart = null;
+  }
+  if (!_chart || _chart.isDisposed()) {
+    _chart = echarts.init(container);
+    _container = container;
+    const ro = new ResizeObserver(() => _chart?.resize());
+    ro.observe(container);
+    _chart.on('datazoom', () => {
+      if (_inSetOption) return; // fired by setOption itself — ignore
+      const dz = _chart?.getOption()?.dataZoom;
+      if (dz?.length) {
+        zoomState.start = dz[0].start ?? 0;
+        zoomState.end   = dz[0].end   ?? 100;
+      }
+    });
+  }
+  return _chart;
+}
 
 // ── Value formatter ───────────────────────────────────────────────────────────
 function fmtValue(v, prefix, suffix, decimals) {
@@ -94,10 +122,11 @@ const EDITOR_FIELDS = [
   { name: 'showLegend',     type: 'checkbox',                   label: 'Show legend' },
 ];
 
+// prevHoriz also at module level — same reason
+let _prevHoriz = null;
+
 export default function App() {
   const containerRef = useRef(null);
-  const chartRef     = useRef(null);
-  const prevHorizRef = useRef(null);
 
   useEditorPanelConfig(EDITOR_FIELDS);
 
@@ -135,36 +164,15 @@ export default function App() {
     ? data[colorColId].map(String)
     : labels;
 
-  // ── Init chart once ──────────────────────────────────────────────────────
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
-    chartRef.current = echarts.init(container);
-    const ro = new ResizeObserver(() => chartRef.current?.resize());
-    ro.observe(container);
-    // Keep zoomState in sync whenever the user moves the slider
-    chartRef.current.on('datazoom', () => {
-      const dz = chartRef.current?.getOption()?.dataZoom;
-      if (dz?.length) {
-        zoomState.start = dz[0].start ?? 0;
-        zoomState.end   = dz[0].end   ?? 100;
-      }
-    });
-    return () => {
-      ro.disconnect();
-      chartRef.current?.dispose();
-      chartRef.current = null;
-    };
-  }, []);
+    if (!container || !labels.length) return;
 
-  // ── Update data and appearance (never touches dataZoom) ───────────────────
-  useEffect(() => {
-    if (!chartRef.current || !labels.length) return;
+    // getChart() handles remounts — returns existing instance or creates a fresh one
+    const chart = getChart(container);
 
     const colours    = buildColours(values, colorKeys, colorMode, barColor, gradientLow);
     const paletteMap = colorMode === 'palette' ? buildPaletteMap(colorKeys) : {};
-
-    // Top corners for vertical bars, right corners for horizontal
     const borderRadius = isHorizontal ? [0, barRadius, barRadius, 0] : [barRadius, barRadius, 0, 0];
 
     const seriesData = values.map((v, i) => ({
@@ -202,7 +210,14 @@ export default function App() {
       ? Object.entries(paletteMap).map(([name, color]) => ({ name, itemStyle: { color } }))
       : [];
 
-    const option = {
+    const orientChanged = _prevHoriz !== isHorizontal;
+    _prevHoriz = isHorizontal;
+    if (orientChanged) { zoomState.start = 0; zoomState.end = 100; }
+
+    const { start, end } = zoomState;
+
+    _inSetOption = true;
+    chart.setOption({
       animation: false,
       grid: {
         top:    legendOn ? 60 : 40,
@@ -223,6 +238,13 @@ export default function App() {
           formatter: ({ value }) => valueFormatter(value),
         },
       }],
+      dataZoom: isHorizontal ? [
+        { type: 'slider', yAxisIndex: 0, right: 8, width: 20, start, end, showDetail: false },
+        { type: 'inside', yAxisIndex: 0 },
+      ] : [
+        { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, start, end, showDetail: false },
+        { type: 'inside', xAxisIndex: 0 },
+      ],
       legend: {
         show: legendOn,
         data: legendData,
@@ -233,25 +255,8 @@ export default function App() {
         axisPointer: { type: 'shadow' },
         valueFormatter,
       },
-    };
-
-    const orientChanged = prevHorizRef.current !== isHorizontal;
-    prevHorizRef.current = isHorizontal;
-
-    // Reset tracked zoom when orientation flips, otherwise keep current position
-    if (orientChanged) { zoomState.start = 0; zoomState.end = 100; }
-
-    // Always pass current zoom position into setOption — ECharts cannot silently reset it
-    const { start, end } = zoomState;
-    option.dataZoom = isHorizontal ? [
-      { type: 'slider', yAxisIndex: 0, right: 8, width: 20, start, end },
-      { type: 'inside', yAxisIndex: 0 },
-    ] : [
-      { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, start, end },
-      { type: 'inside', xAxisIndex: 0 },
-    ];
-
-    chartRef.current.setOption(option);
+    });
+    _inSetOption = false;
   });
 
   if (!dimId || !mesId) {
