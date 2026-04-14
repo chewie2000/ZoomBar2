@@ -224,8 +224,6 @@ export default function App() {
       },
     };
 
-    // Include dataZoom only on first call or when orientation changes —
-    // never on cosmetic config changes, so zoom position is preserved.
     const orientChanged = prevHorizRef.current !== isHorizontal;
     prevHorizRef.current = isHorizontal;
 
@@ -239,7 +237,16 @@ export default function App() {
       ];
     }
 
+    // Save zoom position before update — ECharts can reset it when axis data changes
+    const dzState = !orientChanged ? chartRef.current.getOption()?.dataZoom : null;
+    const savedZoom = dzState?.length ? { start: dzState[0].start, end: dzState[0].end } : null;
+
     chartRef.current.setOption(option);
+
+    // Restore zoom position if ECharts reset it during setOption
+    if (savedZoom) {
+      chartRef.current.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, ...savedZoom });
+    }
   });
 
   if (!dimId || !mesId) {
