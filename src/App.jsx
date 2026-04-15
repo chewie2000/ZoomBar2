@@ -61,13 +61,21 @@ function buildColours(values, colorKeys, mode, barColour, gradLow) {
 
 // ── Chart + zoom state — module-level so they survive React remounts ─────────
 const zoomState = { start: 0, end: 100 };
-let _chart      = null;
-let _container  = null;
-let _zoomReady  = false; // true once dataZoom has been set on this chart instance
+let _chart     = null;
+let _container = null;
+let _zoomReady = false;
 
 function getChart(container) {
   if (_chart && _container !== container) {
-    if (!_chart.isDisposed()) _chart.dispose();
+    if (!_chart.isDisposed()) {
+      // Step 1: read committed zoom position synchronously before disposing.
+      // getOption() returns rendered values — not subject to the 20ms throttle
+      // that the datazoom event has. This is the reliable capture point.
+      const dz = _chart.getOption()?.dataZoom?.[0];
+      if (dz?.start != null) zoomState.start = dz.start;
+      if (dz?.end   != null) zoomState.end   = dz.end;
+      _chart.dispose();
+    }
     _chart = null;
     _zoomReady = false;
   }
@@ -77,7 +85,7 @@ function getChart(container) {
     _zoomReady = false;
     const ro = new ResizeObserver(() => _chart?.resize());
     ro.observe(container);
-    // Read zoom position directly from event params — more reliable than getOption
+    // Also capture via event for interactions within the same chart instance
     _chart.on('datazoom', (params) => {
       const ev = params.batch ? params.batch[0] : params;
       if (ev?.start != null) zoomState.start = ev.start;
@@ -248,21 +256,30 @@ export default function App() {
       },
     };
 
-    // Only include dataZoom on first call per chart instance (or after orientation change).
-    // Including it on every setOption call causes ECharts to reset the slider position.
     if (!_zoomReady) {
-      const { start, end } = zoomState;
+      // Fresh chart — register the dataZoom component, then restore saved position
+      // via dispatchAction inside the 'finished' event. dispatchAction must run
+      // after ECharts has committed its first render, not inline after setOption.
       option.dataZoom = isHorizontal ? [
-        { type: 'slider', yAxisIndex: 0, right: 8, width: 20, showDetail: false, start, end },
+        { type: 'slider', yAxisIndex: 0, right: 8, width: 20, showDetail: false },
         { type: 'inside', yAxisIndex: 0 },
       ] : [
-        { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, showDetail: false, start, end },
+        { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, showDetail: false },
         { type: 'inside', xAxisIndex: 0 },
       ];
+      chart.setOption(option);
       _zoomReady = true;
-    }
 
-    chart.setOption(option);
+      // Restore zoom position after ECharts finishes its first render pass
+      const { start, end } = zoomState;
+      chart.one('finished', () => {
+        chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start, end });
+      });
+    } else {
+      // Step 2: replaceMerge tells ECharts to only replace the series component.
+      // dataZoom is untouched entirely — its internal state is fully preserved.
+      chart.setOption(option, { replaceMerge: ['series'] });
+    }
   });
 
   if (!dimId || !mesId) {
