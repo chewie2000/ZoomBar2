@@ -251,11 +251,12 @@ export default function App() {
     // Only include dataZoom on first call per chart instance (or after orientation change).
     // Including it on every setOption call causes ECharts to reset the slider position.
     if (!_zoomReady) {
+      const { start, end } = zoomState;
       option.dataZoom = isHorizontal ? [
-        { type: 'slider', yAxisIndex: 0, right: 8, width: 20, showDetail: false },
+        { type: 'slider', yAxisIndex: 0, right: 8, width: 20, showDetail: false, start, end },
         { type: 'inside', yAxisIndex: 0 },
       ] : [
-        { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, showDetail: false },
+        { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, showDetail: false, start, end },
         { type: 'inside', xAxisIndex: 0 },
       ];
       _zoomReady = true;
