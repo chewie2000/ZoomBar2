@@ -60,31 +60,28 @@ function buildColours(values, colorKeys, mode, barColour, gradLow) {
 }
 
 // ── Chart + zoom state — module-level so they survive React remounts ─────────
-// Sigma remounts the component on every config change; keeping these outside
-// React means the chart instance and zoom position are never lost.
 const zoomState = { start: 0, end: 100 };
-let _chart     = null;   // ECharts instance
-let _container = null;   // DOM node the instance is attached to
-let _inSetOption = false; // guard: ignore datazoom events fired BY setOption
+let _chart      = null;
+let _container  = null;
+let _zoomReady  = false; // true once dataZoom has been set on this chart instance
 
 function getChart(container) {
-  // Container changes on remount — dispose old instance and reinit on new node
   if (_chart && _container !== container) {
     if (!_chart.isDisposed()) _chart.dispose();
     _chart = null;
+    _zoomReady = false;
   }
   if (!_chart || _chart.isDisposed()) {
     _chart = echarts.init(container);
     _container = container;
+    _zoomReady = false;
     const ro = new ResizeObserver(() => _chart?.resize());
     ro.observe(container);
-    _chart.on('datazoom', () => {
-      if (_inSetOption) return; // fired by setOption itself — ignore
-      const dz = _chart?.getOption()?.dataZoom;
-      if (dz?.length) {
-        zoomState.start = dz[0].start ?? 0;
-        zoomState.end   = dz[0].end   ?? 100;
-      }
+    // Read zoom position directly from event params — more reliable than getOption
+    _chart.on('datazoom', (params) => {
+      const ev = params.batch ? params.batch[0] : params;
+      if (ev?.start != null) zoomState.start = ev.start;
+      if (ev?.end   != null) zoomState.end   = ev.end;
     });
   }
   return _chart;
@@ -212,12 +209,13 @@ export default function App() {
 
     const orientChanged = _prevHoriz !== isHorizontal;
     _prevHoriz = isHorizontal;
-    if (orientChanged) { zoomState.start = 0; zoomState.end = 100; }
+    if (orientChanged) {
+      zoomState.start = 0;
+      zoomState.end   = 100;
+      _zoomReady = false; // force dataZoom to be re-sent when orientation changes
+    }
 
-    const { start, end } = zoomState;
-
-    _inSetOption = true;
-    chart.setOption({
+    const option = {
       animation: false,
       grid: {
         top:    legendOn ? 60 : 40,
@@ -238,13 +236,6 @@ export default function App() {
           formatter: ({ value }) => valueFormatter(value),
         },
       }],
-      dataZoom: isHorizontal ? [
-        { type: 'slider', yAxisIndex: 0, right: 8, width: 20, start, end, showDetail: false },
-        { type: 'inside', yAxisIndex: 0 },
-      ] : [
-        { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, start, end, showDetail: false },
-        { type: 'inside', xAxisIndex: 0 },
-      ],
       legend: {
         show: legendOn,
         data: legendData,
@@ -255,8 +246,22 @@ export default function App() {
         axisPointer: { type: 'shadow' },
         valueFormatter,
       },
-    });
-    _inSetOption = false;
+    };
+
+    // Only include dataZoom on first call per chart instance (or after orientation change).
+    // Including it on every setOption call causes ECharts to reset the slider position.
+    if (!_zoomReady) {
+      option.dataZoom = isHorizontal ? [
+        { type: 'slider', yAxisIndex: 0, right: 8, width: 20, showDetail: false },
+        { type: 'inside', yAxisIndex: 0 },
+      ] : [
+        { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, showDetail: false },
+        { type: 'inside', xAxisIndex: 0 },
+      ];
+      _zoomReady = true;
+    }
+
+    chart.setOption(option);
   });
 
   if (!dimId || !mesId) {
