@@ -11,33 +11,33 @@ import {
 function toJsDate(v) {
   if (v == null) return null;
   if (v instanceof Date) return isNaN(v) ? null : v;
-  if (typeof v === 'number') { const ms = v < 1e10 ? v*1000 : v; const d = new Date(ms); return isNaN(d) ? null : d; }
+  if (typeof v === 'number') { const ms = v < 1e10 ? v * 1000 : v; const d = new Date(ms); return isNaN(d) ? null : d; }
   if (typeof v === 'string') { const d = new Date(v); return isNaN(d) ? null : d; }
   return null;
 }
 function toCivilDate(v) {
   const d = toJsDate(v);
-  return d ? new Date(d.getTime() - d.getTimezoneOffset()*60000) : null;
+  return d ? new Date(d.getTime() - d.getTimezoneOffset() * 60000) : null;
 }
-const DATE_FMT = new Intl.DateTimeFormat('en-CA', { year:'numeric', month:'2-digit', day:'2-digit', timeZone:'UTC' });
+const DATE_FMT = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'UTC' });
 function formatCivil(v) { const d = toCivilDate(v); return d ? DATE_FMT.format(d) : String(v); }
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
 function hexToRgb(hex) {
   const h = (hex || '').trim().replace(/^#/, '');
-  const f = h.length === 3 ? h.split('').map(c => c+c).join('') : h;
+  const f = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
   if (f.length !== 6) return [60, 121, 200];
-  return [parseInt(f.slice(0,2),16), parseInt(f.slice(2,4),16), parseInt(f.slice(4,6),16)];
+  return [parseInt(f.slice(0, 2), 16), parseInt(f.slice(2, 4), 16), parseInt(f.slice(4, 6), 16)];
 }
 function lerpColor(lo, hi, t) {
-  const [lr,lg,lb] = hexToRgb(lo), [hr,hg,hb] = hexToRgb(hi);
-  return `rgb(${Math.round(lr+t*(hr-lr))},${Math.round(lg+t*(hg-lg))},${Math.round(lb+t*(hb-lb))})`;
+  const [lr, lg, lb] = hexToRgb(lo), [hr, hg, hb] = hexToRgb(hi);
+  return `rgb(${Math.round(lr + t * (hr - lr))},${Math.round(lg + t * (hg - lg))},${Math.round(lb + t * (hb - lb))})`;
 }
 
 const PALETTE = [
-  '#3c79c8','#e06c4a','#4caf7d','#f0b429','#9b59b6',
-  '#17a2b8','#e91e63','#8bc34a','#ff7043','#5c6bc0',
-  '#26a69a','#ef5350',
+  '#3c79c8', '#e06c4a', '#4caf7d', '#f0b429', '#9b59b6',
+  '#17a2b8', '#e91e63', '#8bc34a', '#ff7043', '#5c6bc0',
+  '#26a69a', '#ef5350',
 ];
 
 function buildPaletteMap(keys) {
@@ -59,42 +59,6 @@ function buildColours(values, colorKeys, mode, barColour, gradLow) {
   return values.map(() => barColour);
 }
 
-// ── Chart + zoom state — module-level so they survive React remounts ─────────
-const zoomState = { start: 0, end: 100 };
-let _chart     = null;
-let _container = null;
-let _zoomReady = false;
-
-function getChart(container) {
-  if (_chart && _container !== container) {
-    if (!_chart.isDisposed()) {
-      // Step 1: read committed zoom position synchronously before disposing.
-      // getOption() returns rendered values — not subject to the 20ms throttle
-      // that the datazoom event has. This is the reliable capture point.
-      const dz = _chart.getOption()?.dataZoom?.[0];
-      if (dz?.start != null) zoomState.start = dz.start;
-      if (dz?.end   != null) zoomState.end   = dz.end;
-      _chart.dispose();
-    }
-    _chart = null;
-    _zoomReady = false;
-  }
-  if (!_chart || _chart.isDisposed()) {
-    _chart = echarts.init(container);
-    _container = container;
-    _zoomReady = false;
-    const ro = new ResizeObserver(() => _chart?.resize());
-    ro.observe(container);
-    // Also capture via event for interactions within the same chart instance
-    _chart.on('datazoom', (params) => {
-      const ev = params.batch ? params.batch[0] : params;
-      if (ev?.start != null) zoomState.start = ev.start;
-      if (ev?.end   != null) zoomState.end   = ev.end;
-    });
-  }
-  return _chart;
-}
-
 // ── Value formatter ───────────────────────────────────────────────────────────
 function fmtValue(v, prefix, suffix, decimals) {
   const dp = parseInt(decimals);
@@ -102,36 +66,45 @@ function fmtValue(v, prefix, suffix, decimals) {
   return `${prefix}${num}${suffix}`;
 }
 
+// ── Persistent chart — lives outside React, never destroyed ──────────────────
+// Sigma remounts the React component on every config change (new DOM container).
+// By keeping the chart div and ECharts instance at module level, they survive
+// remounts entirely. Zoom state is never lost because the chart never reinits.
+const _div = document.createElement('div');
+_div.style.cssText = 'width:100%;height:100vh;';
+const _chart = echarts.init(_div);
+const _ro = new ResizeObserver(() => _chart.resize());
+_ro.observe(_div);
+let _zoomReady = false;
+let _prevHoriz = null;
+
 // ── Editor fields ─────────────────────────────────────────────────────────────
 const EDITOR_FIELDS = [
   { name: 'source',         type: 'element' },
-  { name: 'dimensionCol',   type: 'column',   source: 'source', label: 'Axis',             allowedTypes: ['text', 'datetime'] },
-  { name: 'measureCol',     type: 'column',   source: 'source', label: 'Measure',           allowedTypes: ['number', 'integer'] },
-  { name: 'orientation',    type: 'radio',                      label: 'Orientation',        values: ['vertical', 'horizontal'], defaultValue: 'vertical', singleLine: true },
-  { name: 'labelRotate',    type: 'text',                       label: 'Label rotation',     defaultValue: '45' },
-  { name: 'showLabels',     type: 'checkbox',                   label: 'Show labels',        defaultValue: true },
-  { name: 'labelSize',      type: 'text',                       label: 'Label size',         defaultValue: '12' },
+  { name: 'dimensionCol',   type: 'column',   source: 'source', label: 'Axis',           allowedTypes: ['text', 'datetime'] },
+  { name: 'measureCol',     type: 'column',   source: 'source', label: 'Measure',         allowedTypes: ['number', 'integer'] },
+  { name: 'orientation',    type: 'radio',                      label: 'Orientation',      values: ['vertical', 'horizontal'], defaultValue: 'vertical', singleLine: true },
+  { name: 'labelRotate',    type: 'text',                       label: 'Label rotation',   defaultValue: '45' },
+  { name: 'showLabels',     type: 'checkbox',                   label: 'Show labels',      defaultValue: true },
+  { name: 'labelSize',      type: 'text',                       label: 'Label size',       defaultValue: '12' },
   { name: 'labelWidth',     type: 'text',                       label: 'Max label width' },
   { name: 'axisTitle',      type: 'text',                       label: 'Axis title' },
   { name: 'yPrefix',        type: 'text',                       label: 'Value prefix' },
   { name: 'ySuffix',        type: 'text',                       label: 'Value suffix' },
   { name: 'yDecimals',      type: 'text',                       label: 'Decimal places' },
-  { name: 'barRadius',      type: 'text',                       label: 'Rounded corners',    defaultValue: '0' },
+  { name: 'barRadius',      type: 'text',                       label: 'Rounded corners',  defaultValue: '0' },
   { name: 'showDataLabels', type: 'checkbox',                   label: 'Show data labels' },
-  { name: 'dataLabelSize',  type: 'text',                       label: 'Data label size',    defaultValue: '11' },
-  { name: 'dataLabelPos',   type: 'radio',                      label: 'Label position',     values: ['top', 'inside'], defaultValue: 'top', singleLine: true },
-  { name: 'colorMode',      type: 'radio',                      label: 'Color mode',         values: ['single', 'gradient', 'palette'], defaultValue: 'single', singleLine: true },
+  { name: 'dataLabelSize',  type: 'text',                       label: 'Data label size',  defaultValue: '11' },
+  { name: 'dataLabelPos',   type: 'radio',                      label: 'Label position',   values: ['top', 'inside'], defaultValue: 'top', singleLine: true },
+  { name: 'colorMode',      type: 'radio',                      label: 'Color mode',       values: ['single', 'gradient', 'palette'], defaultValue: 'single', singleLine: true },
   { name: 'barColor',       type: 'color',                      label: 'Bar color' },
   { name: 'gradientLow',    type: 'color',                      label: 'Gradient low' },
-  { name: 'colorCol',       type: 'column',   source: 'source', label: 'Palette column',    allowedTypes: ['text', 'number', 'integer', 'datetime'] },
+  { name: 'colorCol',       type: 'column',   source: 'source', label: 'Palette column',  allowedTypes: ['text', 'number', 'integer', 'datetime'] },
   { name: 'showLegend',     type: 'checkbox',                   label: 'Show legend' },
 ];
 
-// prevHoriz also at module level — same reason
-let _prevHoriz = null;
-
 export default function App() {
-  const containerRef = useRef(null);
+  const rootRef = useRef(null);
 
   useEditorPanelConfig(EDITOR_FIELDS);
 
@@ -163,18 +136,22 @@ export default function App() {
   const cols = useElementColumns(sourceId);
 
   const dimIsDate = cols?.[dimId]?.columnType === 'datetime';
-  const labels    = (data?.[dimId]    ?? []).map(v => dimIsDate ? formatCivil(v) : String(v));
-  const values    = (data?.[mesId]    ?? []).map(Number);
+  const labels    = (data?.[dimId]  ?? []).map(v => dimIsDate ? formatCivil(v) : String(v));
+  const values    = (data?.[mesId]  ?? []).map(Number);
   const colorKeys = (colorColId && data?.[colorColId])
     ? data[colorColId].map(String)
     : labels;
 
+  // On every mount (including Sigma-triggered remounts), re-attach the
+  // persistent div. The ECharts instance inside it is untouched.
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !labels.length) return;
+    const root = rootRef.current;
+    if (root && !root.contains(_div)) root.appendChild(_div);
+  });
 
-    // getChart() handles remounts — returns existing instance or creates a fresh one
-    const chart = getChart(container);
+  // Update chart data and appearance
+  useEffect(() => {
+    if (!labels.length) return;
 
     const colours    = buildColours(values, colorKeys, colorMode, barColor, gradientLow);
     const paletteMap = colorMode === 'palette' ? buildPaletteMap(colorKeys) : {};
@@ -217,11 +194,7 @@ export default function App() {
 
     const orientChanged = _prevHoriz !== isHorizontal;
     _prevHoriz = isHorizontal;
-    if (orientChanged) {
-      zoomState.start = 0;
-      zoomState.end   = 100;
-      _zoomReady = false; // force dataZoom to be re-sent when orientation changes
-    }
+    if (orientChanged) _zoomReady = false;
 
     const option = {
       animation: false,
@@ -244,22 +217,11 @@ export default function App() {
           formatter: ({ value }) => valueFormatter(value),
         },
       }],
-      legend: {
-        show: legendOn,
-        data: legendData,
-        selectedMode: false,
-      },
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
-        valueFormatter,
-      },
+      legend: { show: legendOn, data: legendData, selectedMode: false },
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, valueFormatter },
     };
 
     if (!_zoomReady) {
-      // Fresh chart — register the dataZoom component, then restore saved position
-      // via dispatchAction inside the 'finished' event. dispatchAction must run
-      // after ECharts has committed its first render, not inline after setOption.
       option.dataZoom = isHorizontal ? [
         { type: 'slider', yAxisIndex: 0, right: 8, width: 20, showDetail: false },
         { type: 'inside', yAxisIndex: 0 },
@@ -267,28 +229,19 @@ export default function App() {
         { type: 'slider', xAxisIndex: 0, bottom: 8, height: 20, showDetail: false },
         { type: 'inside', xAxisIndex: 0 },
       ];
-      chart.setOption(option);
       _zoomReady = true;
-
-      // Restore zoom position after ECharts finishes its first render pass
-      const { start, end } = zoomState;
-      chart.one('finished', () => {
-        chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start, end });
-      });
-    } else {
-      // Step 2: replaceMerge tells ECharts to only replace the series component.
-      // dataZoom is untouched entirely — its internal state is fully preserved.
-      chart.setOption(option, { replaceMerge: ['series'] });
     }
+
+    _chart.setOption(option);
   });
 
   if (!dimId || !mesId) {
     return (
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', color:'#999', fontSize:13 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#999', fontSize: 13 }}>
         Select a dimension and measure column.
       </div>
     );
   }
 
-  return <div ref={containerRef} style={{ width:'100%', height:'100vh' }} />;
+  return <div ref={rootRef} style={{ width: '100%', height: '100vh' }} />;
 }
